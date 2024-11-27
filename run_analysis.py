@@ -200,4 +200,5 @@ polygon_key = secret['polygon_key']
 
 while True: 
     process()
-    time.sleep(60*4)
+    for num in tqdm(range(0,60), desc = 'Cooling off'):
+        time.sleep(1)
