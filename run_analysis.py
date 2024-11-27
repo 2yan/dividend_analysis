@@ -3,7 +3,6 @@ import json
 import pytz
 import time
 from tqdm import tqdm
-import seaborn as sea
 import requests 
 import mplfinance as mpf
 import pandas as pd
@@ -12,7 +11,7 @@ from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
 
 def get_message():
-    queue_url = "https://sqs.us-west-2.amazonaws.com/283282745763/dividend_analysis_jobs.fifo"
+    queue_url = "https://sqs.us-west-2.amazonaws.com/283282745763/dividend_analysis"
     sqs = boto3.client('sqs')
     response = sqs.receive_message(QueueUrl=queue_url, MaxNumberOfMessages=1, WaitTimeSeconds= 10)
     
@@ -25,7 +24,7 @@ def get_message():
     return message
     
 def clear_message(message):
-    queue_url = "https://sqs.us-west-2.amazonaws.com/283282745763/dividend_analysis_jobs.fifo"
+    queue_url = "https://sqs.us-west-2.amazonaws.com/283282745763/dividend_analysis"
     sqs = boto3.client('sqs')
     sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=message['ReceiptHandle'])
     print("Message deleted.")
@@ -129,69 +128,76 @@ def analyze(row):
     candles = candles.set_index('time')
     return candles
     
-message = get_message()
-message_body = json.loads(message['Body'])
-ticker = message_body['ticker']
+    
+def process():
+    message = get_message()
+    message_body = json.loads(message['Body'])
+    ticker = message_body['ticker']
 
+    divs = get_dividend_dates(ticker)
+
+    final = []
+    for row in tqdm(divs): 
+        ex_div_date = row['ex_dividend_date']
+        record_date = row['record_date']
+
+        begin = pd.to_datetime(record_date) - pd.offsets.BDay(4)
+        end = pd.to_datetime(record_date) + pd.offsets.BDay(4)
+        try:
+            candles = get_candles(ticker, begin, end, '1Hour')
+            row['candles'] = candles
+            final.append(row)
+        except Exception as e:
+            
+            pass
+
+    results = []
+    for thing in final: 
+        ans = analyze(thing)
+        if -1 in ans.index:
+            base_price = ans.loc[-1]['vw']
+            ans['vw'] = ans['vw']/base_price
+            ans['date'] = thing['record_date']
+            results.append(ans)
+
+    if len(results) > 0:
+        x = pd.concat(results).reset_index()    
+        stats = x.groupby('time')['vw'].describe().loc[0]
+        drop = min(stats.loc['75%'] , stats.loc['25%'])
+        drop = 1 - float(drop)
+        yeild = float(message_body['yeild']) 
+        if drop < yeild:
+            text = f"""
+            Potential Trade: 
+            {json.dumps(message_body)}
+            
+            EXPECTED DROP: {100 * drop} %
+            
+            EXPECTED YIELD: {100 * yeild} %
+            
+            EXPECTED PROFIT: {100 * (yeild- drop)}  %
+            
+            STATS
+            {stats}
+            """
+            notify(text)
+            print("Profit predicted emailing")
+        
+        if drop > yeild:
+            print("NEGATIVE PROFIT PREDICTED")
+            
+
+        
+        
+        
+
+    clear_message(message)
+    
 secret = get_secret()
 alpaca_key = secret['alpaca_key']
 alpaca_secret = secret['alpaca_secret']
 polygon_key = secret['polygon_key']
-divs = get_dividend_dates(ticker)
 
-final = []
-for row in tqdm(divs): 
-    ex_div_date = row['ex_dividend_date']
-    record_date = row['record_date']
-
-    begin = pd.to_datetime(record_date) - pd.offsets.BDay(4)
-    end = pd.to_datetime(record_date) + pd.offsets.BDay(4)
-    try:
-        candles = get_candles(ticker, begin, end, '1Hour')
-        row['candles'] = candles
-        final.append(row)
-    except Exception as e:
-        
-        pass
-
-results = []
-for thing in final: 
-    ans = analyze(thing)
-    if -1 in ans.index:
-        base_price = ans.loc[-1]['vw']
-        ans['vw'] = ans['vw']/base_price
-        ans['date'] = thing['record_date']
-        results.append(ans)
-
-if len(results) > 0:
-    x = pd.concat(results).reset_index()    
-    stats = x.groupby('time')['vw'].describe().loc[0]
-    drop = min(stats.loc['75%'] , stats.loc['25%'])
-    drop = 1 - float(drop)
-    yeild = float(message_body['yeild']) 
-    if drop < yeild:
-        text = f"""
-        Potential Trade: 
-        {json.dumps(message_body)}
-        
-        EXPECTED DROP: {100 * drop} %
-        
-        EXPECTED YIELD: {100 * yeild} %
-        
-        EXPECTED PROFIT: {100 * (yeild- drop)}  %
-        
-        STATS
-        {stats}
-        """
-        notify(text)
-        print("Profit predicted emailing")
-    
-    if drop > yeild:
-        print("NEGATIVE PROFIT PREDICTED")
-        
-
-    
-    
-    
-
-clear_message(message)
+while True: 
+    process()
+    time.sleep(60*4)
