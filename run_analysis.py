@@ -98,8 +98,7 @@ def get_dividend_dates(ticker):
     while url:
         if 'apiKey' not in url:
             url = url + f'&apiKey={polygon_key}'
-        else: 
-            time.sleep(12)
+        time.sleep(12)
             
         r = requests.get(url)
         
