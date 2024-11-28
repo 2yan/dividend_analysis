@@ -167,14 +167,15 @@ def process():
         yeild = float(message_body['yeild']) 
         if drop < yeild:
             text = f"""
-            Potential Trade: 
+            Potential Trade: EXPECTED PROFIT: {100 * (yeild- drop)}  %
+            
             {json.dumps(message_body)}
             
             EXPECTED DROP: {100 * drop} %
             
             EXPECTED YIELD: {100 * yeild} %
             
-            EXPECTED PROFIT: {100 * (yeild- drop)}  %
+            
             
             STATS
             {stats}
