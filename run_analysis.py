@@ -4,11 +4,10 @@ import pytz
 import time
 from tqdm import tqdm
 import requests 
-import mplfinance as mpf
 import pandas as pd
 from zoneinfo import ZoneInfo
-from datetime import datetime, timedelta
-import matplotlib.pyplot as plt
+from datetime import datetime
+import sys
 
 def get_message():
     queue_url = "https://sqs.us-west-2.amazonaws.com/283282745763/dividend_analysis"
@@ -32,7 +31,7 @@ def clear_message(message):
 def notify(plain_text):
     sns_client = boto3.client('sns', region_name='us-west-2')
     topic_arn = 'arn:aws:sns:us-west-2:283282745763:trading'
-    response = sns_client.publish(
+    sns_client.publish(
         TopicArn=topic_arn,
         Message=plain_text,
     )
@@ -92,13 +91,14 @@ def get_candles(ticker, start_date, end_date, timeframe = '30Min'):
         r.raise_for_status()
 
 def get_dividend_dates(ticker):
+    print('Getting Dividend Dates')
     url = f"https://api.polygon.io/v3/reference/dividends?ticker={ticker}&apiKey={polygon_key}"
     results = []
-    
+    i = 0
     while url:
         if 'apiKey' not in url:
             url = url + f'&apiKey={polygon_key}'
-        time.sleep(12)
+        
             
         r = requests.get(url)
         
@@ -109,7 +109,10 @@ def get_dividend_dates(ticker):
         results.extend(data.get('results', []))
         
         url = data.get('next_url')
-        
+        if i > 0: # Can't hit this Url more than 5 times a minute
+            time.sleep(12) 
+        i = i + 1
+
     
     return results
 
@@ -130,13 +133,15 @@ def analyze(row):
     
 def process():
     message = get_message()
+    if not message: 
+        return False
     message_body = json.loads(message['Body'])
     ticker = message_body['ticker']
 
     divs = get_dividend_dates(ticker)
 
     final = []
-    for row in tqdm(divs): 
+    for row in tqdm(divs, 'Calculating Historical Performance '): 
         ex_div_date = row['ex_dividend_date']
         record_date = row['record_date']
 
@@ -152,12 +157,15 @@ def process():
 
     results = []
     for thing in final: 
-        ans = analyze(thing)
-        if -1 in ans.index:
-            base_price = ans.loc[-1]['vw']
-            ans['vw'] = ans['vw']/base_price
-            ans['date'] = thing['record_date']
-            results.append(ans)
+        try:
+            ans = analyze(thing)
+            if -1 in ans.index:
+                base_price = ans.loc[-1]['vw']
+                ans['vw'] = ans['vw']/base_price
+                ans['date'] = thing['record_date']
+                results.append(ans)
+        except Exception as e: 
+            e
 
     if len(results) > 0:
         x = pd.concat(results).reset_index()    
@@ -168,7 +176,7 @@ def process():
 
         if drop < yeild:
             text = f"""
-            Potential Trade: EXPECTED PROFIT: {100 * (yeild- drop)}  %
+            Potential Trade: EXPECTED PROFIT: {round(100 * (yeild- drop),4)}  %
             
             {json.dumps(message_body)}
             
@@ -186,13 +194,11 @@ def process():
         
         if drop > yeild:
             print("NEGATIVE PROFIT PREDICTED")
+    if len(results) == 0:
+        print("Not enough history found")
             
-
-        
-        
-        
-
     clear_message(message)
+    return True
     
 secret = get_secret()
 alpaca_key = secret['alpaca_key']
@@ -200,6 +206,9 @@ alpaca_secret = secret['alpaca_secret']
 polygon_key = secret['polygon_key']
 
 while True: 
-    process()
-    for num in tqdm(range(0,60), desc = 'Cooling off'):
+    ans = process()
+    if not ans: 
+        print("Exiting")
+        sys.exit(0)
+    for num in tqdm(range(0,12), desc = 'Cooling off'):
         time.sleep(1)
