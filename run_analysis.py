@@ -163,8 +163,9 @@ def process():
         x = pd.concat(results).reset_index()    
         stats = x.groupby('time')['vw'].describe().loc[0]
         drop = min(stats.loc['75%'] , stats.loc['25%'])
-        drop = 1 - float(drop)
-        yeild = float(message_body['yeild']) 
+        drop = round(1 - float(drop),4)
+        yeild = round(float(message_body['yeild']),4)
+
         if drop < yeild:
             text = f"""
             Potential Trade: EXPECTED PROFIT: {100 * (yeild- drop)}  %
